@@ -1,0 +1,7 @@
+---
+CASSANDRA_VERSION: '3.11.13'
+# This is the name of the cluster.
+#
+# IMPORTANT: Do not change the cluster name for existing installations.
+#            Renaming an existing cluster is not supported by the Ansible Scripts.
+cluster_name: powermooh_data

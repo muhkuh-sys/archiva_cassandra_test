@@ -1,0 +1,106 @@
+- name: Create the archiva group.
+  ansible.builtin.group:
+    name: 'archiva'
+    system: yes
+    state: present
+
+- name: Create the archiva user.
+  ansible.builtin.user:
+    name: 'archiva'
+    group: 'archiva'
+    state: present
+    create_home: no
+    system: yes
+
+- name: Create the Archiva folders owned by root.
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    group: root
+    owner: root
+    mode: '0755'
+  with_items:
+    - /opt/archiva
+    - /var/lib/archiva
+
+- name: Create the Archiva folders owned by archiva.
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    group: archiva
+    owner: archiva
+    mode: '0755'
+  with_items:
+    - /var/lib/archiva/logs
+    - /var/lib/archiva/data
+    - /var/lib/archiva/temp
+    - /var/lib/archiva/conf
+    - /var/lib/archiva/repositories
+
+- name: Extract the Archiva release.
+  ansible.builtin.unarchive:
+    src: 'files/apache-archiva-{{ ARCHIVA_VERSION }}-bin.tar.gz'
+    dest: '/opt/archiva'
+    owner: root
+    group: root
+
+- name: Create a symlink to the current Archiva release.
+  ansible.builtin.file:
+    src: '/opt/archiva/apache-archiva-{{ ARCHIVA_VERSION }}'
+    dest: '/opt/archiva/archiva'
+    owner: root
+    group: root
+    state: link
+
+- name: Copy configuration files.
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: /var/lib/archiva/conf/
+    group: archiva
+    owner: archiva
+    mode: '0644'
+  with_items:
+    - files/archiva.xml
+    - files/jetty.xml
+    - files/shared.xml
+    - files/wrapper.conf
+
+- name: Template configuration file to cassandra.yaml
+  ansible.builtin.template:
+    src: files/archiva-cassandra.properties.j2
+    dest: /var/lib/archiva/conf/archiva-cassandra.properties
+    group: root
+    owner: root
+    mode: '0644'
+
+- name: Copy the default environment variables
+  ansible.builtin.copy:
+    src: files/etc/default/archiva
+    dest: /etc/default/archiva
+    owner: root
+    group: root
+    mode: '0644'
+#  notify:
+#    - Restart Archiva
+
+# Archiva needs OpenJDK8 to run.
+- name: Install OpenJDKs.
+  ansible.builtin.apt:
+    name: ['openjdk-8-jdk']
+    state: present
+
+- name: Install the Archiva service file
+  ansible.builtin.copy:
+    src: files/etc/systemd/system/archiva.service
+    dest: /etc/systemd/system/
+
+- name: Enable the Archiva service
+  ansible.builtin.systemd:
+    name: archiva.service
+    enabled: yes
+    masked: no
+
+- name: Ensure Archiva is running
+  ansible.builtin.systemd:
+    name: archiva.service
+    state: started

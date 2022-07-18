@@ -1,0 +1,167 @@
+- name: Create the cassandra group
+  ansible.builtin.group:
+    name: 'cassandra'
+    system: yes
+    state: present
+
+- name: Create the cassandra user
+  ansible.builtin.user:
+    name: 'cassandra'
+    group: 'cassandra'
+    state: present
+    create_home: no
+    system: yes
+
+- name: Create the cassandra folders owned by root
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  with_items:
+    - /opt/cassandra
+    - /var/lib/cassandra
+
+- name: Create the Cassandra folders owned by cassandra
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    group: cassandra
+    owner: cassandra
+    mode: '0755'
+  with_items:
+    - /var/lib/cassandra/cdc_raw
+    - /var/lib/cassandra/config
+    - /var/lib/cassandra/commitlog
+    - /var/lib/cassandra/data
+    - /var/lib/cassandra/hints
+    - /var/lib/cassandra/logs
+    - /var/lib/cassandra/saved_caches
+
+- name: Extract the Cassandra release
+  ansible.builtin.unarchive:
+    src: 'files/apache-cassandra-{{ CASSANDRA_VERSION }}-bin.tar.gz'
+    dest: '/opt/cassandra'
+    owner: root
+    group: root
+  notify:
+    - Restart Cassandra
+
+- name: Create a symlink to the current Cassandra release
+  ansible.builtin.file:
+    src: '/opt/cassandra/apache-cassandra-{{ CASSANDRA_VERSION }}'
+    dest: '/opt/cassandra/cassandra'
+    owner: root
+    group: root
+    state: link
+  notify:
+    - Restart Cassandra
+
+# Create the configuration file "cassandra.yaml".
+# NOTE: This must be done before starting the service, or the
+#       cluster starts with a wrong name.
+- name: Template configuration file to cassandra.yaml
+  ansible.builtin.template:
+    src: files/config/cassandra.yaml.j2
+    dest: /var/lib/cassandra/config/cassandra.yaml
+    group: root
+    owner: root
+    mode: '0644'
+  notify:
+    - Restart Cassandra
+
+# Create the configuration file "cassandra-rackdc.properties".
+- name: Template configuration file to cassandra-rackdc.properties
+  ansible.builtin.template:
+    src: files/config/cassandra-rackdc.properties.j2
+    dest: /var/lib/cassandra/config/cassandra-rackdc.properties
+    group: root
+    owner: root
+    mode: '0644'
+  notify:
+    - Restart Cassandra
+
+- name: Copy static Cassandra configuration.
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: /var/lib/cassandra/config
+  with_items:
+    - files/config/cassandra-env.sh
+    - files/config/commitlog_archiving.properties
+    - files/config/hotspot_compiler
+    - files/config/jvm.options
+    - files/config/logback-tools.xml
+    - files/config/logback.xml
+  notify:
+    - Restart Cassandra
+
+- name: Copy Cassandra security limits
+  ansible.builtin.copy:
+    src: files/etc/security/limits.d/cassandra.conf
+    dest: /etc/security/limits.d/
+  notify:
+    - Restart Cassandra
+
+- name: Copy Cassandra system options
+  ansible.builtin.copy:
+    src: files/etc/sysctl.d/cassandra.conf
+    dest: /etc/sysctl.d/
+  notify:
+    - Restart Cassandra
+
+# Das hat leider nichts gebracht.
+#  # Modify the security settings to get Cassandra out of degraded mode.
+#  # The Debian package sets "nproc" to 8096, but 32768 is recommended.
+#  - name: Set nproc for Cassandra.
+#    ansible.builtin.lineinfile:
+#      path: /etc/security/limits.d/cassandra.conf
+#      regexp: '^cassandra\s+\-\s+nproc\s+\d+'
+#      line: 'cassandra  -  nproc    32768'
+
+- name: Copy the default environment variables
+  ansible.builtin.copy:
+    src: files/etc/default/cassandra
+    dest: /etc/default/cassandra
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Restart Cassandra
+
+# Cassandra needs OpenJDK11 to run.
+# The CQLSH tool needs Python2.7 .
+- name: Install required packages
+  ansible.builtin.apt:
+    name: ['python2.7', 'openjdk-8-jdk']
+    state: present
+  notify:
+    - Restart Cassandra
+
+- name: Install the Cassandra service file
+  ansible.builtin.copy:
+    src: files/etc/systemd/system/cassandra.service
+    dest: /etc/systemd/system/
+  notify:
+    - Restart Cassandra
+
+- name: Enable the Cassandra service
+  ansible.builtin.systemd:
+    name: cassandra.service
+    enabled: yes
+    masked: no
+
+- name: Flush handlers
+  meta: flush_handlers
+
+- name: Ensure Cassandra is running
+  ansible.builtin.systemd:
+    name: cassandra.service
+    state: started
+
+- name: Wait for CQLSH port to open
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[inventory_hostname].ansible_default_ipv4.address }}"
+    port: 9042
+    sleep: 1
+    timeout: 300

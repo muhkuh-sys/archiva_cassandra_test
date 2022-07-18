@@ -1,0 +1,103 @@
+#! /bin/bash
+set -e
+
+SSHCFG=~/.ssh/config.d/powermooh
+SSHKEY=~/.ssh/powermooh_id_ed25519
+
+# Clear any old config extension.
+rm -f ${SSHCFG}
+# Remove any old SSH keys.
+rm -f ${SSHKEY} ${SSHKEY}.pub
+
+# Create a new SSH key for the "powermooh" user.
+ssh-keygen -t ed25519 -f ${SSHKEY} -P ''
+
+# This is a list of all hostnames with their IP.
+atInstances=(
+  'powermooh02 10.4.34.2'
+  'powermooh03 10.4.34.3'
+  'powermooh04 10.4.34.4'
+)
+for strInstance in "${atInstances[@]}"
+do
+	tInstance=($strInstance)
+	INSTNAME=${tInstance[0]}
+	INSTIP=${tInstance[1]}
+
+	echo "Starting instance '${INSTNAME}' ..."
+
+	# Create the VM.
+	lxc init ubuntu:22.04 ${INSTNAME} --vm
+	lxc config set ${INSTNAME} limits.memory 3GB
+	lxc network attach lxdbr0 ${INSTNAME} eth0 eth0
+	lxc config device set ${INSTNAME} eth0 ipv4.address ${INSTIP}
+	lxc start ${INSTNAME}
+
+	# Get the IP of the instance.
+	echo "Waiting for ${INSTNAME} to boot..."
+	INSTIP=''
+	while [ "$INSTIP" = "" ]
+	do
+		INSTIP=$(lxc list --format csv --columns=4 ${INSTNAME} | cut --delimiter=' ' --fields=1)
+		if [ "$INSTIP" = "" ]; then
+			echo "..."
+			sleep 0.5
+		fi
+	done
+
+	# Create the powermooh user with a group, password and SSH keys.
+	lxc exec ${INSTNAME} -- groupadd powermooh
+	lxc exec ${INSTNAME} -- useradd --gid powermooh --create-home --password '$1$cwXweBpq$gDXyIncH2d3TVjU17dUr5/' --shell /bin/bash powermooh
+	lxc exec ${INSTNAME} -- mkdir --parents --mode=700 /home/powermooh/.ssh
+	lxc file push ${SSHKEY} ${INSTNAME}/home/powermooh/.ssh/
+	lxc file push ${SSHKEY}.pub ${INSTNAME}/home/powermooh/.ssh/
+	lxc file push ${SSHKEY}.pub ${INSTNAME}/home/powermooh/.ssh/authorized_keys
+	lxc exec ${INSTNAME} -- chown -R powermooh:powermooh /home/powermooh/.ssh
+	lxc exec ${INSTNAME} -- chmod 600 /home/powermooh/.ssh/authorized_keys
+
+	# Allow the powermooh user to run all sudo commands.
+	echo "powermooh     ALL=(ALL) NOPASSWD:ALL" | lxc exec ${INSTNAME} -- tee /etc/sudoers.d/powermooh
+
+	# Add the new host entries to the SSH config to allow easy access.
+	echo "" >> ${SSHCFG}
+	echo "Host ${INSTNAME}" >> ${SSHCFG}
+	echo "    Hostname ${INSTIP}" >> ${SSHCFG}
+	echo "    StrictHostKeyChecking no" >> ${SSHCFG}
+	echo "    UserKnownHostsFile=/dev/null" >> ${SSHCFG}
+	echo "    User powermooh" >> ${SSHCFG}
+	echo "    IdentityFile ~/.ssh/hilscher/powermooh/id_ed25519" >> ${SSHCFG}
+
+	# Collect the hosts entries.
+	HOSTS=$(printf "%s\n%s\t%s.hilscher.local %s" "${HOSTS}" "${INSTIP}" "${INSTNAME}" "${INSTNAME}")
+done
+
+rm -f data/hosts
+echo "${HOSTS}" >data/hosts
+
+# Append the hosts to all instances.
+for strInstance in "${atInstances[@]}"
+do
+	tInstance=($strInstance)
+	INSTNAME=${tInstance[0]}
+	INSTIP=${tInstance[1]}
+
+	# Copy the additions for the hosts file to temp.
+	lxc file push data/hosts ${INSTNAME}/tmp/hosts
+	# Append the new hosts entries.
+	lxc exec ${INSTNAME} -- /bin/bash -c "cat /tmp/hosts >> /etc/hosts"
+	# Remove the file in temp.
+	lxc exec ${INSTNAME} -- rm /tmp/hosts
+
+	# Remove any old version of the known hosts.
+	lxc exec ${INSTNAME} -- rm -f /home/powermooh/.ssh/known_hosts
+	# Add the keys for all instances.
+	for strInstance2 in "${atInstances[@]}"
+	do
+		tInstance2=($strInstance2)
+		INSTNAME2=${tInstance2[0]}
+
+		lxc exec ${INSTNAME} -- /usr/bin/sudo -u powermooh /bin/bash -c "ssh-keyscan -H ${INSTNAME2} >> ~/.ssh/known_hosts"
+		lxc exec ${INSTNAME} -- /usr/bin/sudo -u powermooh /bin/bash -c "ssh-keyscan -H ${INSTNAME2}.hilscher.local >> ~/.ssh/known_hosts"
+	done
+	lxc exec ${INSTNAME} -- chmod 600 /home/powermooh/.ssh/known_hosts
+done

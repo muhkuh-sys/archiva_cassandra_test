@@ -1,0 +1,17 @@
+[Unit]
+Description=Apache Cassandra
+Documentation=https://cassandra.apache.org
+Requires=network.target
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/cassandra
+ExecStart=/opt/cassandra/cassandra/bin/cassandra -f
+WorkingDirectory=/opt/cassandra/cassandra
+Restart=on-failure
+User=cassandra
+Group=cassandra
+
+[Install]
+WantedBy=multi-user.target

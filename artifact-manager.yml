@@ -1,0 +1,71 @@
+---
+- hosts: PowermoohDatabases
+  remote_user: powermooh
+  become: yes
+  become_user: root
+
+  tasks:
+  - name: update package list once per day
+    ansible.builtin.apt:
+      update_cache: yes
+      cache_valid_time: 86400
+
+  - name: uninstall unwanted packets
+    ansible.builtin.apt:
+      name: ['cloud-init', 'landscape-common', 'pastebinit', 'plymouth', 'snapd', 'unattended-upgrades']
+      state: absent
+      purge: yes
+
+  - name: Disable unwanted services.
+    ansible.builtin.systemd:
+      name: '{{ item }}'
+      enabled: no
+      state: stopped
+    with_items:
+      - 'apt-daily.timer'
+
+  - name: limit the journal
+    ansible.builtin.ini_file:
+      path: /etc/systemd/journald.conf
+      section: Journal
+      option: SystemMaxUse
+      value: 128M
+      create: no
+
+  # Avahi is useful to find servers if something went wrong with the IP
+  # configuration. Run
+  #
+  #   avahi-resolve-host-name -4 hardware33.local
+  #
+  # to get the IP. Please note that this is only the hostname without the
+  # "hilscher" part.
+  - name: Install avahi
+    ansible.builtin.apt:
+      name: avahi-daemon
+      state: present
+
+  - name: Install sntp
+    ansible.builtin.apt:
+      name: sntp
+      state: present
+
+  - name: Set the timezone.
+    ansible.builtin.timezone:
+      name: Europe/Berlin
+
+  - name: Install Apache Cassandra.
+    ansible.builtin.include_role:
+      name: cassandra
+    when: inventory_hostname in groups["CassandraNodes"]
+
+  - name: Create the keyspace.
+    cassandra_cqlsh:
+      cqlsh_host: "{{ hostvars[inventory_hostname].ansible_default_ipv4.address }}"
+      cqlsh_cmd: bash --init-file /etc/default/cassandra /opt/cassandra/cassandra/bin/cqlsh
+      execute: "CREATE KEYSPACE IF NOT EXISTS archiva WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : {{ groups['CassandraNodes'] | length }} }"
+    when: inventory_hostname == groups['CassandraNodes'][0]
+
+  - name: Install Apache Archiva.
+    ansible.builtin.include_role:
+      name: archiva
+    when: inventory_hostname in groups["ArchivaNodes"]

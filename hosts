@@ -1,0 +1,23 @@
+all:
+  children:
+    PowermoohDatabases:
+      hosts:
+        powermooh02:
+        powermooh03:
+        powermooh04:
+    CassandraNodes:
+      hosts:
+        powermooh02:
+          dc: dc1
+          rack: rack1
+        powermooh03:
+          dc: dc1
+          rack: rack2
+        powermooh04:
+          dc: dc1
+          rack: rack3
+    ArchivaNodes:
+      hosts:
+        powermooh02:
+        powermooh03:
+        powermooh04:

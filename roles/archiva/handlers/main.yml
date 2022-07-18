@@ -1,0 +1,6 @@
+---
+- name: Restart Archiva
+  systemd:
+    name: archiva.service
+    state: restarted
+    daemon_reload: yes

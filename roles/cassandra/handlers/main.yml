@@ -1,0 +1,6 @@
+---
+- name: Restart Cassandra
+  systemd:
+    name: cassandra.service
+    state: restarted
+    daemon_reload: yes
